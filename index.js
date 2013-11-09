@@ -1,88 +1,146 @@
 'use strict';
 
-var net = require('net'),
-    tls = require('tls'),
-    async = require('async'),
-    commandParser = require('./ircb/parser/command-parser'),
-    replies = require('./ircb/parser/replies.json');
+var commandParser = require('./ircb/parser/command-parser')
+  , replies = require('./ircb/parser/replies.json')
+  , debug = require('debug')('ircb.io')
+  , crypto = require('crypto')
+  , async = require('async')
+  , net = require('net')
+  , tls = require('tls');
 
+/**
+ * Create a new IRC connection.
+ *
+ * Options:
+ *
+ *  host: The hostname.
+ *  secure: secure connection.
+ *  rejectUnauthorized: ignore ssl errors.
+ *  port: The port number we should connect to.
+ *  nick: The nickname.
+ *  password: The nickname's password.
+ *  user: The username.
+ *  channels: The channels to join.
+ *
+ * @constructor
+ * @param {Object} options The configuration
+ * @param {Function} cb Optional callback.
+ * @api public
+ */
 function IRCb(options, cb) {
   if (!(this instanceof IRCb)) return new IRCb(options, cb);
 
-  var self = this;
+  this.secure = !!options.secure;
+  this.rejectUnauthorized = !!options.rejectUnauthorized;
+  this.port = options.port || (this.secure ? 6697 : 6667);
+  this.nick = options.nick;
+  this.password = options.password;
+  this.username = options.username;
+  this.realName = options.realName;
 
-  if (typeof cb === 'function') {
-    self.on('register', cb);
-  }
+  this._namesReplies = {};  // <names> replies.
+  this.channels = [];       // current active channels.
+  this.motd = '';           // The motd response.
 
-  self.host = options.host;
-  self.secure = !!options.secure;
-  self.rejectUnauthorized = !!options.rejectUnauthorized;
-  self.port = options.port || (self.secure ? 6697 : 6667);
-  self.nick = options.nick;
-  self.password = options.password;
-
-  self.channels = [];
-
-  self.motd = '';
-
-  self._namesReplies = {};
-
-  self.connection = (self.secure ? tls : net).connect({
-    host: self.host,
-    port: self.port,
-    rejectUnauthorized: self.rejectUnauthorized
-  }, function () {
-    self.connection.on('data', function (chunk) {
-      self._onData(chunk);
+  //
+  // Establish a new connection.
+  //
+  var ircb = this;
+  this.connection = (this.secure ? tls : net).connect({
+    host: this.host,
+    port: this.port,
+    rejectUnauthorized: this.rejectUnauthorized
+  }, function connected() {
+    ircb.connection.on('data', function data(chunk) {
+      ircb._onData(chunk);
     });
 
+    ircb.trigger('connect');
+
     async.series([
-      function (next) {
-        return options.password
-          ? self.pass(options.password, next)
+      function authenticate(next) {
+        return ircb.password
+          ? ircb.pass(ircb.password, next)
           : next();
       },
-      function (next) {
-        return options.nick
-          ? self.nick_(options.nick, next)
+      function nickanme(next) {
+        return ircb.nick
+          ? ircb.nick_(ircb.nick, next)
           : next();
       },
-      function (next) {
-        return (options.username && options.realName)
-          ? self.user(options.username, options.realName, next)
+      function username(next) {
+        return (ircb.username && ircb.realName)
+          ? ircb.user(ircb.username, ircb.realName, next)
           : next();
       },
-      function (next) {
-        self.on('motd', function () {
+      function join(next) {
+        ircb.on('motd', function motd() {
           return options.channels
-            ? self.join(options.channels, next)
+            ? ircb.join(options.channels, next)
             : next();
         });
       }
-    ], function () {
-      self.emit('register');
+    ], function done() {
+      ircb.trigger('ready');
     });
-  }).on('error', function (err) {
-    self.emit('error', err);
-  }).on('close', function (errBool) {
-    self.emit('close', errBool);
+  }).on('error', function error(err) {
+    ircb.trigger('error', err);
+  }).on('close', function close(errBool) {
+    ircb.trigger('close', errBool);
   });
 
-  self.connection.setEncoding('utf-8');
+  //
+  // Force UTF-8 encoding on the stream in order to prevent broken chunks of
+  // messages that are cut right between the bytes.
+  //
+  this.connection.setEncoding('utf-8');
 }
 
-IRCb.prototype.__proto__ = require('events').EventEmitter.prototype;
+IRCb.prototype.__proto__ = require('eventemitter3').prototype;
 
-IRCb.prototype._onData = function (chunk) {
-  chunk.split('\r\n').filter(Boolean).forEach(this._parseMessage.bind(this));
+/**
+ * Emit a `event` as well as an extra `data` event for the received message.
+ *
+ * @param {String} event The name of the event we should trigger.
+ * @api public
+ */
+IRCb.prototype.trigger = function trigger(event) {
+  if (this.listeners(event).length) {
+    this.emit.apply(this, arguments);
+  }
+
+  this.emit.apply(this, ['data'].cancat(Array.prototype.slice.call(arguments, 0)));
+  return this;
 };
 
-IRCb.prototype._parseMessage = function (chunk) {
+/**
+ * We've received some incoming data chunk from the IRC server.
+ *
+ * @param {String} chunk The data.
+ * @api private
+ */
+IRCb.prototype._onData = function (chunk) {
+  chunk.split('\r\n').filter(Boolean)
+    .forEach(this._parseMessage.bind(this));
+};
+
+/**
+ * Parse the incoming message.
+ *
+ * @param {String} chunk The incoming message
+ * @api private
+ */
+IRCb.prototype._parseMessage = function parse(chunk) {
   this._processMessage(commandParser(chunk));
 };
 
-IRCb.prototype._processMessage = function (message) {
+/**
+ * Process the actual message.
+ *
+ * @param {Object} message The parsed server response.
+ * @api private
+ */
+IRCb.prototype._processMessage = function process(message) {
   var reply = replies[message.command],
       command = (reply && reply.name) || message.command,
       channel;
@@ -100,26 +158,33 @@ IRCb.prototype._processMessage = function (message) {
     case "JOIN":
       channel = message.middle[0];
       if (!channel) channel = message.trailing;
-      this.emit('join', message.prefix, channel);
+
+      this.trigger('join', message.prefix, channel);
+
       if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) === -1) {
         this.channels.push(channel);
       }
+
       break;
 
     case "PART":
       channel = message.middle[0];
-      this.emit('part', message.prefix, channel, message.trailing);
+      this.trigger('part', message.prefix, channel, message.trailing);
+
       if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) !== -1) {
         this.channels.splice(this.channels.indexOf(channel), 1);
       }
+
       break;
 
     case "KICK":
       channel = message.middle[0];
-      this.emit('kick', message.prefix, channel, message.middle[1], message.trailing);
+      this.trigger('kick', message.prefix, channel, message.middle[1], message.trailing);
+
       if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) !== -1) {
         this.channels.splice(this.channels.indexOf(channel), 1);
       }
+
       break;
 
     // Handle MOTD
@@ -128,16 +193,16 @@ IRCb.prototype._processMessage = function (message) {
       break;
 
     case "RPL_ENDOFMOTD":
-      this.emit('motd', this.motd);
+      this.trigger('motd', this.motd);
       break;
 
     case "ERR_NOMOTD":
-      this.emit('motd', null);
+      this.trigger('motd', null);
       break;
 
     case "PRIVMSG":
       var from = message.prefix.substr(0, message.prefix.indexOf('!'));
-      this.emit('message', from, message.middle[0], message.trailing);
+      this.trigger('message', from, message.middle[0], message.trailing);
       break;
 
     // Handle NAMES
@@ -146,66 +211,132 @@ IRCb.prototype._processMessage = function (message) {
       if (!this._namesReplies[channel]) {
         this._namesReplies[channel] = [];
       }
+
       Array.prototype.push.apply(this._namesReplies[channel], message.trailing.split(' ').filter(Boolean));
       break;
 
     case "RPL_ENDOFNAMES":
       channel = message.middle[1];
+
       if (this._namesReplies[channel]) {
-        this.emit('names', channel, this._namesReplies[channel]);
+        this.trigger('names', channel, this._namesReplies[channel]);
         delete this._namesReplies[channel];
       }
+
       break;
 
     default:
-      this.emit(command.toLowerCase(), message.middle[0], message.trailing);
+      this.trigger(command.toLowerCase(), message.middle[0], message.trailing);
       break;
   }
 };
 
+/**
+ * Write the nickname's password.
+ *
+ * @param {String} pass The password.
+ * @param {Function} fn The callback.
+ * @api private
+ */
 IRCb.prototype.pass = function (pass, cb) {
   this.write('PASS ' + pass, cb);
 };
 
+/**
+ * Change the nickname of the user.
+ *
+ * @param {String} nick The new nickname.
+ * @param {Function} cb The callback.
+ * @api private.
+ */
 IRCb.prototype.nick_ = function (nick, cb) {
   this.write('NICK ' + nick, cb);
 };
 
+/**
+ * Set the username of the current connection.
+ *
+ * @param {String} username The username.
+ * @param {String} realName The realName.
+ * @param {Function} cb The callback.
+ * @api private
+ */
 IRCb.prototype.user = function (username, realName, cb) {
   this.write('USER ' + username + ' 0 * :' + realName, cb);
 };
 
-IRCb.prototype.say = function (target, text, cb) {
+/**
+ * Write a message.
+ *
+ * @param {String} target The receiver of the message.
+ * @param {String} text The message.
+ * @param {Function} cb The callback.
+ * @api public
+ */
+IRCb.prototype.say = function say(target, text, cb) {
   this.write('PRIVMSG ' + target + ' :' + text, cb);
 };
 
-IRCb.prototype.join = function (channels, cb) {
+/**
+ * Join a new channel, or join multiple channels at once.
+ *
+ * @param {String|Array} channels The channels to join.
+ * @param {Function} cb The callback.
+ * @api private
+ */
+IRCb.prototype.join = function join(channels, cb) {
   channels = Array.isArray(channels) ? channels : [ channels ];
   this.write('JOIN ' + channels.join(','), cb);
 };
 
-IRCb.prototype.part = function (channels, message, cb) {
+/**
+ * Part or leave the given IRC channels.
+ *
+ * @param {String|Array} channels The channels to part from.
+ * @param {String} message Optional message for leaving the channel.
+ * @param {Function} fn The callback.
+ * @api public
+ */
+IRCb.prototype.part = IRCB.prototype.leave = function part(channels, message, cb) {
   if (typeof message === 'function') {
     cb = message;
     message = '';
   }
+
   channels = Array.isArray(channels) ? channels : [ channels ];
   this.write('PART ' + channels.join(',') + ' :' + message, cb);
 };
 
-IRCb.prototype.kick = function (channel, nick, message, cb) {
+/**
+ * Kick a user out of the channel.
+ *
+ * @param {String} channel The channel we should kick the user from
+ * @param {String} nick The nickname we need to kick
+ * @param {String} message Optional message.
+ * @param {Function} cb The callback.
+ * @api public
+ */
+IRCb.prototype.kick = function kick(channel, nick, message, cb) {
   if (typeof message === 'function') {
     cb = message;
     message = null;
   }
+
   if (message === null || typeof message === 'undefined') {
     message = nick;
   }
+
   this.write('KICK ' + channel + ' ' + nick + ' :' + message, cb);
 };
 
-
-IRCb.prototype.names = function (channel, cb) {
+/**
+ * Retrieve a list of users for the given IRC room.
+ *
+ * @param {String} channel The channel.
+ * @param {Fucntion} cb The calblack.
+ * @api public
+ */
+IRCb.prototype.names = function names(channel, cb) {
   var self = this;
 
   self.write('NAMES ' + channel, function (err) {
@@ -222,14 +353,37 @@ IRCb.prototype.names = function (channel, cb) {
   });
 };
 
-IRCb.prototype.quit = function (msg, cb) {
+/**
+ * Quit the connection.
+ *
+ * @param {String} msg The shutdown message.
+ * @param {Function} cb The callback.
+ * @api public
+ */
+IRCb.prototype.quit = function quit(msg, cb) {
   var self = this;
 
-  self.write('QUIT :' + (msg || 'Goodbye.'), cb);
+  msg = msg || [
+    'TTYL, if you also want a better IRC experiance, checkout',
+    'http://ircb.io?f='+ crypto.createHash('md5').update(this.ircbio).digest('hex')
+  ].join(' ');
+
+  self.write('QUIT :'+ msg, cb);
 };
 
-IRCb.prototype.write = function (string, cb) {
-  this.connection.write(string + '\r\n', cb);
+/**
+ * Write a new message to the IRC server.
+ *
+ * @param {String} string The message or command we write to the connection.
+ * @param {Function} fn The callback.
+ * @return {Boolean} successful write.
+ * @api public
+ */
+IRCb.prototype.write = function write(string, cb) {
+  return this.connection.write(string + '\r\n', cb);
 };
 
+//
+// Expose the module.
+//
 module.exports = IRCb;

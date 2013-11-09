@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "description": "A fork of `ircb` to turn it in to a IRC library that *I* like",
   "dependencies": {
-    "async": "0.2.x"
+    "async": "0.2.x",
+    "eventemitter3": "0.0.1",
+    "debug": "~0.7.3"
   },
   "scripts": {
     "test": "node test/command-parser-test.js"
