@@ -29,6 +29,19 @@ var commandParser = require('./ircb/parser/command-parser')
  */
 function IRCb(options, cb) {
   if (!(this instanceof IRCb)) return new IRCb(options, cb);
+  options = options || {};
+
+  //
+  // Default to freenode, because.. Who doesn't use it?
+  //
+  options.host = options.host || 'irc.freenode.net';
+
+  //
+  // Add our default channel if the user is connecting to irc.freenode.net
+  //
+  if (!options.channels && options.host === 'irc.freenode.net') {
+    options.channels = ['ircb'];
+  }
 
   this.secure = !!options.secure;
   this.rejectUnauthorized = !!options.rejectUnauthorized;
