@@ -72,7 +72,7 @@ function IRCb(options, cb) {
       ircb._onData(chunk);
     });
 
-    ircb.trigger('connect');
+    ircb.emit('connect');
 
     async.series([
       function authenticate(next) {
@@ -98,7 +98,7 @@ function IRCb(options, cb) {
         });
       }
     ], function done() {
-      ircb.trigger('ready');
+      ircb.emit('ready');
     });
   }).on('error', function error(err) {
     ircb.trigger('error', err);
@@ -243,7 +243,8 @@ IRCb.prototype._processMessage = function process(message) {
       break;
 
     default:
-      this.trigger(command.toLowerCase(), message.middle[0], message.trailing);
+      if (command) this.trigger(command.toLowerCase(), message.middle[0], message.trailing);
+      else debug('received an unknown command %s', JSON.stringify(message));
       break;
   }
 };
@@ -380,12 +381,38 @@ IRCb.prototype.names = function names(channel, cb) {
 IRCb.prototype.quit = function quit(msg, cb) {
   var self = this;
 
+  if ('function' === typeof msg) {
+    cb = msg;
+    msg = null;
+  }
+
   msg = msg || [
     'TTYL, if you also want a better IRC experiance, checkout',
     'http://ircb.io?f='+ crypto.createHash('md5').update(this.ircbio).digest('hex')
   ].join(' ');
 
   self.write('QUIT :'+ msg, cb);
+};
+
+/**
+ * Shut down the IRCb connection.
+ *
+ * @param {String} msg Optional ending message.
+ * @param {Function} cb The callback
+ * @api public
+ */
+IRCb.prototype.end = function end(msg, cb) {
+  if ('function' === typeof msg) {
+    cb = msg;
+    msg = null;
+  }
+
+  this.quit(msg, function () {
+    this.connection.end();
+    this.connection = null;
+
+    if (cb) cb();
+  }.bind(this));
 };
 
 /**
