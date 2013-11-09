@@ -34,18 +34,22 @@ function IRCb(options, cb) {
   //
   // Default to freenode, because.. Who doesn't use it?
   //
-  options.host = options.host || 'irc.freenode.net';
+  if (!options.host) {
+    options.host = 'irc.freenode.org';
+    options.secure = true;
+  }
 
   //
   // Add our default channel if the user is connecting to irc.freenode.net
   //
-  if (!options.channels && options.host === 'irc.freenode.net') {
-    options.channels = ['ircb'];
+  if (!options.channels && options.host === 'irc.freenode.org') {
+    options.channels = ['#ircb'];
   }
 
   this.secure = !!options.secure;
   this.rejectUnauthorized = !!options.rejectUnauthorized;
-  this.port = options.port || (this.secure ? 6697 : 6667);
+  this.port = +options.port || (this.secure ? 6697 : 6667);
+  this.host = options.host;
   this.nick = options.nick;
   this.password = options.password;
   this.username = options.username;
@@ -62,7 +66,7 @@ function IRCb(options, cb) {
   this.connection = (this.secure ? tls : net).connect({
     host: this.host,
     port: this.port,
-    rejectUnauthorized: this.rejectUnauthorized
+    rejectUnauthorized: false
   }, function connected() {
     ircb.connection.on('data', function data(chunk) {
       ircb._onData(chunk);
@@ -122,7 +126,7 @@ IRCb.prototype.trigger = function trigger(event) {
     this.emit.apply(this, arguments);
   }
 
-  this.emit.apply(this, ['data'].cancat(Array.prototype.slice.call(arguments, 0)));
+  this.emit.apply(this, ['data'].concat(Array.prototype.slice.call(arguments, 0)));
   return this;
 };
 
@@ -310,7 +314,7 @@ IRCb.prototype.join = function join(channels, cb) {
  * @param {Function} fn The callback.
  * @api public
  */
-IRCb.prototype.part = IRCB.prototype.leave = function part(channels, message, cb) {
+IRCb.prototype.part = IRCb.prototype.leave = function part(channels, message, cb) {
   if (typeof message === 'function') {
     cb = message;
     message = '';
