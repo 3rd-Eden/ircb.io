@@ -163,8 +163,18 @@ IRCb.prototype._processMessage = function process(message) {
       channel;
 
   switch (command) {
-    case 'ping':
+    case 'PING':
       this.write('PONG :' + message.trailing);
+    break;
+
+    case "RPL_ENDOFMOTD":
+      this.emit('motd', this.motd);
+      this.emit('data', command, message);
+    break;
+
+    case "ERR_NOMOTD":
+      this.emit('motd', null);
+      this.emit('data', command, message);
     break;
 
     default:
