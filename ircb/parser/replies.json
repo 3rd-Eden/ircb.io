@@ -191,6 +191,10 @@
     "name": "RPL_CHANNELMODEIS",
     "type": "response"
   },
+  "328": {
+    "name": "RPL_CHANNEL_URL",
+    "type": "response"
+  },
   "331": {
     "name": "RPL_NOTOPIC",
     "type": "response"

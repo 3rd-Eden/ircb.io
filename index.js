@@ -101,9 +101,9 @@ function IRCb(options, cb) {
       ircb.emit('ready');
     });
   }).on('error', function error(err) {
-    ircb.trigger('error', err);
+    ircb.emit('error', err);
   }).on('close', function close(errBool) {
-    ircb.trigger('close', errBool);
+    ircb.emit('close', errBool);
   });
 
   //
@@ -163,90 +163,103 @@ IRCb.prototype._processMessage = function process(message) {
       channel;
 
   switch (command) {
-    case "001":
-    case "NICK":
-      this.nick = (command === "001") ? message.middle[0] : message.trailing;
-      break;
-
-    case "PING":
+    case 'ping':
       this.write('PONG :' + message.trailing);
-      break;
-
-    case "JOIN":
-      channel = message.middle[0];
-      if (!channel) channel = message.trailing;
-
-      this.trigger('join', message.prefix, channel);
-
-      if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) === -1) {
-        this.channels.push(channel);
-      }
-
-      break;
-
-    case "PART":
-      channel = message.middle[0];
-      this.trigger('part', message.prefix, channel, message.trailing);
-
-      if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) !== -1) {
-        this.channels.splice(this.channels.indexOf(channel), 1);
-      }
-
-      break;
-
-    case "KICK":
-      channel = message.middle[0];
-      this.trigger('kick', message.prefix, channel, message.middle[1], message.trailing);
-
-      if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) !== -1) {
-        this.channels.splice(this.channels.indexOf(channel), 1);
-      }
-
-      break;
-
-    // Handle MOTD
-    case "RPL_MOTD":
-      this.motd += message.trailing + '\n';
-      break;
-
-    case "RPL_ENDOFMOTD":
-      this.trigger('motd', this.motd);
-      break;
-
-    case "ERR_NOMOTD":
-      this.trigger('motd', null);
-      break;
-
-    case "PRIVMSG":
-      var from = message.prefix.substr(0, message.prefix.indexOf('!'));
-      this.trigger('message', from, message.middle[0], message.trailing);
-      break;
-
-    // Handle NAMES
-    case "RPL_NAMREPLY":
-      channel = message.middle[2];
-      if (!this._namesReplies[channel]) {
-        this._namesReplies[channel] = [];
-      }
-
-      Array.prototype.push.apply(this._namesReplies[channel], message.trailing.split(' ').filter(Boolean));
-      break;
-
-    case "RPL_ENDOFNAMES":
-      channel = message.middle[1];
-
-      if (this._namesReplies[channel]) {
-        this.trigger('names', channel, this._namesReplies[channel]);
-        delete this._namesReplies[channel];
-      }
-
-      break;
+    break;
 
     default:
-      if (command) this.trigger(command.toLowerCase(), message.middle[0], message.trailing);
-      else debug('received an unknown command %s', JSON.stringify(message));
-      break;
+      this.emit('data', command, message);
+    break;
   }
+
+//  switch (command) {
+//    case "001":
+//    case "NICK":
+//      this.nick = (command === "001") ? message.middle[0] : message.trailing;
+//      break;
+//
+//    case "PING":
+//      this.write('PONG :' + message.trailing);
+//      break;
+//
+//    case "JOIN":
+//      channel = message.middle[0];
+//      if (!channel) channel = message.trailing;
+//
+//      this.trigger('join', message.prefix, channel);
+//
+//      if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) === -1) {
+//        this.channels.push(channel);
+//      }
+//
+//      break;
+//
+//    case "PART":
+//      channel = message.middle[0];
+//      this.trigger('part', message.prefix, channel, message.trailing);
+//
+//      if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) !== -1) {
+//        this.channels.splice(this.channels.indexOf(channel), 1);
+//      }
+//
+//      break;
+//
+//    case "KICK":
+//      channel = message.middle[0];
+//      this.trigger('kick', message.prefix, channel, message.middle[1], message.trailing);
+//
+//      if (message.prefix.split('!')[0] === this.nick && this.channels.indexOf(channel) !== -1) {
+//        this.channels.splice(this.channels.indexOf(channel), 1);
+//      }
+//
+//      break;
+//
+//    // Handle MOTD
+//    case "RPL_MOTD":
+//      this.motd += message.trailing + '\n';
+//      break;
+//
+//    case "RPL_ENDOFMOTD":
+//      this.trigger('motd', this.motd);
+//      break;
+//
+//    case "ERR_NOMOTD":
+//      this.trigger('motd', null);
+//      break;
+//
+//    case "PRIVMSG":
+//      var from = message.prefix.substr(0, message.prefix.indexOf('!'));
+//      this.trigger('message', from, message.middle[0], message.trailing);
+//      break;
+//
+//    // Handle NAMES
+//    case "RPL_NAMREPLY":
+//      channel = message.middle[2];
+//      if (!this._namesReplies[channel]) {
+//        this._namesReplies[channel] = [];
+//      }
+//
+//      Array.prototype.push.apply(this._namesReplies[channel], message.trailing.split(' ').filter(Boolean));
+//      break;
+//
+//    case "RPL_ENDOFNAMES":
+//      channel = message.middle[1];
+//
+//      if (this._namesReplies[channel]) {
+//        this.trigger('names', channel, this._namesReplies[channel]);
+//        delete this._namesReplies[channel];
+//      }
+//
+//      break;
+//
+//    default:
+//      if (command) {
+//        console.log('')
+//        this.trigger(command.toLowerCase(), message.middle[0], message.trailing);
+//      }
+//      else debug('received an unknown command %s', JSON.stringify(message));
+//      break;
+//  }
 };
 
 /**
@@ -387,8 +400,8 @@ IRCb.prototype.quit = function quit(msg, cb) {
   }
 
   msg = msg || [
-    'TTYL, if you also want a better IRC experiance, checkout',
-    'http://ircb.io?f='+ crypto.createHash('md5').update(this.ircbio).digest('hex')
+    'TTYL, if you also want a better IRC experiance, checkout --',
+    'http://ircb.io'
   ].join(' ');
 
   self.write('QUIT :'+ msg, cb);
